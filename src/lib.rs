@@ -3,12 +3,12 @@ pub mod render_target;
 pub use egui_wgpu as renderer;
 pub use egui_winit as platform;
 
-pub use platform::egui;
+use egui::ClippedPrimitive;
 pub use platform::winit;
 pub use renderer::wgpu;
 
 pub use platform::State as Platform;
-pub use renderer::renderer::RenderPass as Renderer;
+pub use renderer::renderer::Renderer;
 
 use egui::Context as Ctx;
 use winit::window;
@@ -18,6 +18,7 @@ pub struct Backend {
     ctx: Ctx,
     platform: Platform,
     renderer: Renderer,
+    prims: Option<Vec<ClippedPrimitive>>,
 }
 
 impl Backend {
@@ -26,16 +27,21 @@ impl Backend {
             event_loop,
             device,
             rt_format,
+            window,
         } = desc;
 
-        let platform = Platform::new(event_loop);
-        let renderer = Renderer::new(device, rt_format, 1);
+        let mut platform = Platform::new(window);
+        platform.set_max_texture_side(device.limits().max_texture_dimension_2d as usize);
+        platform.set_pixels_per_point(window.scale_factor() as f32);
+        let renderer = Renderer::new(device, rt_format, None, 1);
         let ctx = Ctx::default();
+        //ctx.set_pixels_per_point(window.scale_factor() as f32);
 
         Self {
             ctx,
             platform,
             renderer,
+            prims: None,
         }
     }
 
@@ -43,7 +49,7 @@ impl Backend {
     pub fn handle_event<T>(&mut self, event: &winit::event::Event<T>) -> bool {
         match event {
             winit::event::Event::WindowEvent { event, .. } => {
-                self.platform.on_event(&self.ctx, event)
+                self.platform.on_event(&self.ctx, event).consumed
             }
             _ => false,
         }
@@ -69,8 +75,8 @@ impl Backend {
             device,
             queue,
             encoder,
-            render_target,
-            load_operation,
+            view,
+            //load_operation,
         } = desc;
 
         let screen_descriptor = {
@@ -89,9 +95,22 @@ impl Backend {
             .handle_platform_output(window, &self.ctx, full_output.platform_output);
 
         let clipped_primitives = self.ctx().tessellate(full_output.shapes);
+        self.prims = Some(clipped_primitives);
 
-        self.renderer
-            .update_buffers(device, queue, &clipped_primitives, &screen_descriptor);
+        let clear_color = wgpu::Color {
+            r: 0.1,
+            g: 0.2,
+            b: 0.3,
+            a: 1.0,
+        };
+
+        self.renderer.update_buffers(
+            device,
+            queue,
+            encoder,
+            self.prims.as_ref().unwrap(),
+            &screen_descriptor,
+        );
         for (tex_id, img_delta) in full_output.textures_delta.set {
             self.renderer
                 .update_texture(device, queue, tex_id, &img_delta);
@@ -99,18 +118,23 @@ impl Backend {
         for tex_id in full_output.textures_delta.free {
             self.renderer.free_texture(&tex_id);
         }
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear_color),
+                    store: true,
+                },
+            })],
+            depth_stencil_attachment: None,
+        });
 
-        let clear_color = match load_operation {
-            wgpu::LoadOp::Clear(c) => Some(c),
-            wgpu::LoadOp::Load => None,
-        };
-
-        self.renderer.execute(
-            encoder,
-            render_target,
-            &clipped_primitives,
+        self.renderer.render(
+            &mut render_pass,
+            self.prims.as_ref().unwrap(),
             &screen_descriptor,
-            clear_color,
         );
     }
 
@@ -143,6 +167,7 @@ pub struct BackendDescriptor<'a, T: 'static> {
     pub device: &'a wgpu::Device,
     /// Render target format
     pub rt_format: wgpu::TextureFormat,
+    pub window: &'a winit::window::Window,
 }
 
 pub struct RenderDescriptor<'a> {
@@ -152,6 +177,7 @@ pub struct RenderDescriptor<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub encoder: &'a mut wgpu::CommandEncoder,
-    pub render_target: &'a wgpu::TextureView,
-    pub load_operation: wgpu::LoadOp<wgpu::Color>,
+    pub view: &'a wgpu::TextureView,
+    //pub render_target: &'a wgpu::TextureView,
+    //pub load_operation: wgpu::LoadOp<wgpu::Color>,
 }

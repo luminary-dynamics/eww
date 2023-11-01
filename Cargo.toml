@@ -11,6 +11,7 @@ repository = "https://github.com/LU15W1R7H/eww"
 license = "Apache-2.0"
 
 [dependencies]
+egui = { git = "https://github.com/emilk/egui" }
 egui-wgpu = { git = "https://github.com/emilk/egui" }
 egui-winit = { git = "https://github.com/emilk/egui" }
 

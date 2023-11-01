@@ -1,6 +1,8 @@
-use eww::{egui, wgpu, winit};
+use egui;
+use eww::{wgpu, winit};
 
 use winit::{
+    event::{ElementState, KeyboardInput, VirtualKeyCode},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
@@ -11,19 +13,17 @@ use futures::executor::block_on;
 fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-        .with_resizable(false)
         .with_title("eww basic example")
         .build(&event_loop)
         .unwrap();
 
-    let wgpu = block_on(WgpuCtx::init(&window));
+    let mut wgpu = block_on(WgpuCtx::init(&window));
 
     let mut backend = eww::Backend::new(eww::BackendDescriptor {
-        window: &window,
         device: &wgpu.device,
         rt_format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        style: egui::Style::default(),
-        font_definitions: egui::FontDefinitions::default(),
+        event_loop: &event_loop,
+        window: &window,
     });
 
     event_loop.run(move |event, _, control_flow| {
@@ -31,17 +31,42 @@ fn main() {
 
         match event {
             Event::MainEventsCleared => window.request_redraw(),
-            Event::RedrawRequested(_) => render(&wgpu, &window, &mut backend),
-
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                *control_flow = ControlFlow::Exit;
+            Event::RedrawRequested(window_id) if window_id == window.id() => {
+                render(&wgpu, &window, &mut backend)
             }
+            Event::WindowEvent {
+                ref event,
+                window_id,
+            } if window_id == window.id() => match event {
+                WindowEvent::CloseRequested
+                | WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            state: ElementState::Pressed,
+                            virtual_keycode: Some(VirtualKeyCode::Escape),
+                            ..
+                        },
+                    ..
+                } => *control_flow = ControlFlow::Exit,
+                WindowEvent::Resized(new_size) => {
+                    resize(&mut wgpu, *new_size);
+                }
+                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    resize(&mut wgpu, **new_inner_size);
+                }
+                _ => {}
+            },
             _ => {}
         }
     });
+}
+
+fn resize(wgpu: &mut WgpuCtx, new_size: winit::dpi::PhysicalSize<u32>) {
+    if new_size.width > 0 && new_size.height > 0 {
+        wgpu.config.width = new_size.width;
+        wgpu.config.height = new_size.height;
+        wgpu.surface.configure(&wgpu.device, &wgpu.config);
+    }
 }
 
 fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend) {
@@ -49,14 +74,16 @@ fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend) {
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-    let frame = match wgpu.swap_chain.get_current_frame() {
-        Ok(frame) => frame,
-        Err(e) => {
-            eprintln!("wgpu error: {}", e);
-            return;
-        }
+    let output = wgpu.surface.get_current_texture().unwrap();
+    let view = output
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let clear_color = wgpu::Color {
+        r: 0.1,
+        g: 0.2,
+        b: 0.3,
+        a: 1.0,
     };
-    let rt = &frame.output.view;
 
     backend.render(
         eww::RenderDescriptor {
@@ -65,37 +92,56 @@ fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend) {
             device: &wgpu.device,
             queue: &wgpu.queue,
             encoder: &mut encoder,
-            render_target: rt,
-            load_operation: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            view: &view,
         },
         |ctx| {
             build_gui(ctx);
         },
     );
-
     wgpu.queue.submit(Some(encoder.finish()));
+    output.present();
 }
 
-fn build_gui(ctx: egui::CtxRef) {
-    egui::Window::new("eww basic example").show(&ctx, |ui| {
-        ui.label("This is a basic example of eww.");
+fn build_gui(ctx: &egui::Context) {
+    let mut name = "asd";
+    let mut age = 0;
+    egui::Window::new("eww basic example").show(ctx, |ui| {
+        ui.heading("My egui Application");
+        ui.horizontal(|ui| {
+            let name_label = ui.label("Your name: ");
+            ui.text_edit_singleline(&mut name)
+                .labelled_by(name_label.id);
+        });
+        ui.add(egui::Slider::new(&mut age, 0..=120).text("age"));
+        if ui.button("Click each year").clicked() {
+            age += 1;
+        }
+        ui.label(format!("Hello '{name}', age {age}"));
     });
 }
 
 struct WgpuCtx {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    swap_chain: wgpu::SwapChain,
+    surface: wgpu::Surface,
+    config: wgpu::SurfaceConfiguration,
 }
 
 impl WgpuCtx {
     async fn init(window: &Window) -> Self {
-        let instance = wgpu::Instance::new(wgpu::BackendBit::PRIMARY);
-        let surface = unsafe { instance.create_surface(window) };
+        let size = window.inner_size();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            dx12_shader_compiler: Default::default(),
+        });
+
+        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
             })
             .await
             .unwrap();
@@ -112,22 +158,32 @@ impl WgpuCtx {
             .await
             .unwrap();
 
-        let window_size = window.inner_size();
+        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(surface_caps.formats[0]);
 
-        let sc_desc = wgpu::SwapChainDescriptor {
-            usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            width: window_size.width,
-            height: window_size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: surface_caps.present_modes[0],
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
         };
+        surface.configure(&device, &config);
 
-        let swap_chain = device.create_swap_chain(&surface, &sc_desc);
+        let window_size = window.inner_size();
 
         Self {
             device,
             queue,
-            swap_chain,
+            surface,
+            config,
         }
     }
 }

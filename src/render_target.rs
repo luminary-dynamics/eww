@@ -22,6 +22,7 @@ impl RenderTarget {
 
         let descriptor = wgpu::TextureDescriptor {
             label: Some("egui_wgpu_render_target_texture"),
+            view_formats: &[],
             size: extent,
             mip_level_count: 1,
             sample_count: 1,
@@ -68,9 +69,9 @@ impl RenderTarget {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, size: impl Into<egui::Vec2>) -> egui::Response {
-        ui.image(self.texture_id, size)
-    }
+    //pub fn ui(&mut self, ui: &mut egui::Ui, size: impl Into<egui::Vec2>) -> egui::Response {
+    //ui.image(self.texture_id, size)
+    //}
 
     pub fn texture_id(&self) -> egui::TextureId {
         self.texture_id
