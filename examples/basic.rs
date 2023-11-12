@@ -1,4 +1,4 @@
-use egui;
+use egui::{self};
 use eww::{wgpu, winit};
 
 use winit::{
@@ -7,6 +7,12 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
+
+#[derive(Default)]
+struct GuiState {
+    pub name: String,
+    pub age: u8,
+}
 
 use futures::executor::block_on;
 
@@ -22,9 +28,12 @@ fn main() {
     let mut backend = eww::Backend::new(eww::BackendDescriptor {
         device: &wgpu.device,
         rt_format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        event_loop: &event_loop,
         window: &window,
     });
+
+    let mut gui_state = GuiState {
+        ..Default::default()
+    };
 
     event_loop.run(move |event, _, control_flow| {
         backend.handle_event(&event);
@@ -32,7 +41,7 @@ fn main() {
         match event {
             Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested(window_id) if window_id == window.id() => {
-                render(&wgpu, &window, &mut backend)
+                render(&wgpu, &window, &mut backend, &mut gui_state)
             }
             Event::WindowEvent {
                 ref event,
@@ -69,15 +78,16 @@ fn resize(wgpu: &mut WgpuCtx, new_size: winit::dpi::PhysicalSize<u32>) {
     }
 }
 
-fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend) {
-    let mut encoder = wgpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-
+fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend, gui_state: &mut GuiState) {
     let output = wgpu.surface.get_current_texture().unwrap();
     let view = output
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut encoder = wgpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     let clear_color = wgpu::Color {
         r: 0.1,
         g: 0.2,
@@ -85,38 +95,51 @@ fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend) {
         a: 1.0,
     };
 
-    backend.render(
-        eww::RenderDescriptor {
-            textures_to_update: &[],
-            window,
-            device: &wgpu.device,
-            queue: &wgpu.queue,
-            encoder: &mut encoder,
-            view: &view,
-        },
-        |ctx| {
-            build_gui(ctx);
-        },
-    );
+    let render_desc = eww::RenderDescriptor {
+        textures_to_update: &[],
+        window,
+        device: &wgpu.device,
+        queue: &wgpu.queue,
+        encoder: &mut encoder,
+    };
+
+    backend.draw_gui(render_desc, |ctx| {
+        build_gui(ctx, gui_state);
+    });
+    {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear_color),
+                    store: true,
+                },
+            })],
+            depth_stencil_attachment: None,
+        });
+
+        backend.render(window, &mut render_pass);
+    }
+
     wgpu.queue.submit(Some(encoder.finish()));
     output.present();
 }
 
-fn build_gui(ctx: &egui::Context) {
-    let mut name = "asd";
-    let mut age = 0;
+fn build_gui(ctx: &egui::Context, gui_state: &mut GuiState) {
     egui::Window::new("eww basic example").show(ctx, |ui| {
         ui.heading("My egui Application");
         ui.horizontal(|ui| {
             let name_label = ui.label("Your name: ");
-            ui.text_edit_singleline(&mut name)
+            ui.text_edit_singleline(&mut gui_state.name)
                 .labelled_by(name_label.id);
         });
-        ui.add(egui::Slider::new(&mut age, 0..=120).text("age"));
+        ui.add(egui::Slider::new(&mut gui_state.age, 0..=120).text("age"));
         if ui.button("Click each year").clicked() {
-            age += 1;
+            gui_state.age += 1;
         }
-        ui.label(format!("Hello '{name}', age {age}"));
+        ui.label(format!("Hello '{}', age {}", gui_state.name, gui_state.age));
     });
 }
 
@@ -176,8 +199,6 @@ impl WgpuCtx {
             view_formats: vec![],
         };
         surface.configure(&device, &config);
-
-        let window_size = window.inner_size();
 
         Self {
             device,

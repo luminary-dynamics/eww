@@ -1,5 +1,3 @@
-pub mod render_target;
-
 pub use egui_wgpu as renderer;
 pub use egui_winit as platform;
 
@@ -21,10 +19,9 @@ pub struct Backend {
     prims: Option<Vec<ClippedPrimitive>>,
 }
 
-impl Backend {
-    pub fn new<T>(desc: BackendDescriptor<T>) -> Self {
+impl<'a> Backend {
+    pub fn new(desc: BackendDescriptor) -> Self {
         let BackendDescriptor {
-            event_loop,
             device,
             rt_format,
             window,
@@ -35,7 +32,7 @@ impl Backend {
         platform.set_pixels_per_point(window.scale_factor() as f32);
         let renderer = Renderer::new(device, rt_format, None, 1);
         let ctx = Ctx::default();
-        //ctx.set_pixels_per_point(window.scale_factor() as f32);
+        ctx.set_pixels_per_point(window.scale_factor() as f32);
 
         Self {
             ctx,
@@ -55,28 +52,17 @@ impl Backend {
         }
     }
 
-    // TODO: is this better than Self::render() taking a closure?
-    // It would be interesting if you could continue building the ui after ending (pausing) a frame.
-    //pub fn begin_frame(&mut self) {
-
-    //}
-
-    //pub fn end_frame(&mut self) {
-    //}
-
-    pub fn render<F>(&mut self, desc: RenderDescriptor, build_ui: F)
+    //FIXME: better name for this
+    pub fn draw_gui<F>(&'a mut self, desc: RenderDescriptor, build_ui: F)
     where
         F: FnOnce(&Ctx),
     {
         let RenderDescriptor {
-            // TODO: use
             textures_to_update: _,
             window,
             device,
             queue,
             encoder,
-            view,
-            //load_operation,
         } = desc;
 
         let screen_descriptor = {
@@ -97,13 +83,6 @@ impl Backend {
         let clipped_primitives = self.ctx().tessellate(full_output.shapes);
         self.prims = Some(clipped_primitives);
 
-        let clear_color = wgpu::Color {
-            r: 0.1,
-            g: 0.2,
-            b: 0.3,
-            a: 1.0,
-        };
-
         self.renderer.update_buffers(
             device,
             queue,
@@ -118,21 +97,22 @@ impl Backend {
         for tex_id in full_output.textures_delta.free {
             self.renderer.free_texture(&tex_id);
         }
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
-                    store: true,
-                },
-            })],
-            depth_stencil_attachment: None,
-        });
+    }
 
+    pub fn render(
+        &'a mut self,
+        window: &'a window::Window,
+        render_pass: &mut wgpu::RenderPass<'a>,
+    ) {
+        let screen_descriptor = {
+            let size = window.inner_size();
+            renderer::renderer::ScreenDescriptor {
+                size_in_pixels: [size.width, size.height],
+                pixels_per_point: window.scale_factor() as f32,
+            }
+        };
         self.renderer.render(
-            &mut render_pass,
+            render_pass,
             self.prims.as_ref().unwrap(),
             &screen_descriptor,
         );
@@ -160,9 +140,7 @@ impl Backend {
 }
 
 /// Backend creation descriptor
-pub struct BackendDescriptor<'a, T: 'static> {
-    /// Winit window
-    pub event_loop: &'a winit::event_loop::EventLoop<T>,
+pub struct BackendDescriptor<'a> {
     /// Wgpu device
     pub device: &'a wgpu::Device,
     /// Render target format
@@ -177,7 +155,4 @@ pub struct RenderDescriptor<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub encoder: &'a mut wgpu::CommandEncoder,
-    pub view: &'a wgpu::TextureView,
-    //pub render_target: &'a wgpu::TextureView,
-    //pub load_operation: wgpu::LoadOp<wgpu::Color>,
 }
