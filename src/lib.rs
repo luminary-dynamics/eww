@@ -1,7 +1,7 @@
 pub use egui_wgpu as renderer;
 pub use egui_winit as platform;
 
-use egui::ClippedPrimitive;
+use egui::{ClippedPrimitive, Window};
 pub use platform::winit;
 pub use renderer::wgpu;
 
@@ -13,7 +13,6 @@ use winit::window;
 
 /// Egui backend with winit platform and wgpu renderer
 pub struct Backend {
-    ctx: Ctx,
     platform: Platform,
     renderer: Renderer,
     prims: Option<Vec<ClippedPrimitive>>,
@@ -26,16 +25,20 @@ impl<'a> Backend {
             rt_format,
             window,
         } = desc;
-
-        let mut platform = Platform::new(window);
-        platform.set_max_texture_side(device.limits().max_texture_dimension_2d as usize);
-        platform.set_pixels_per_point(window.scale_factor() as f32);
-        let renderer = Renderer::new(device, rt_format, None, 1);
         let ctx = Ctx::default();
-        ctx.set_pixels_per_point(window.scale_factor() as f32);
+        let id = ctx.viewport_id();
+        let pixels_per_point = window.scale_factor() as f32;
+        let max_texture_side = device.limits().max_texture_dimension_2d as usize;
+        let platform = Platform::new(
+            ctx,
+            id,
+            window,
+            Some(pixels_per_point),
+            Some(max_texture_side),
+        );
+        let renderer = Renderer::new(device, rt_format, None, 1);
 
         Self {
-            ctx,
             platform,
             renderer,
             prims: None,
@@ -43,10 +46,14 @@ impl<'a> Backend {
     }
 
     // output indicates if egui wants exclusive access to this event
-    pub fn handle_event<T>(&mut self, event: &winit::event::Event<T>) -> bool {
+    pub fn handle_event<T>(
+        &mut self,
+        window: &window::Window,
+        event: &winit::event::Event<T>,
+    ) -> bool {
         match event {
             winit::event::Event::WindowEvent { event, .. } => {
-                self.platform.on_event(&self.ctx, event).consumed
+                self.platform.on_window_event(window, event).consumed
             }
             _ => false,
         }
@@ -74,13 +81,14 @@ impl<'a> Backend {
         };
 
         let raw_input: egui::RawInput = self.platform.take_egui_input(window);
-        let full_output = self.ctx.run(raw_input, |ctx| {
+        let full_output = self.ctx().run(raw_input, |ctx| {
             build_ui(ctx);
         });
         self.platform
-            .handle_platform_output(window, &self.ctx, full_output.platform_output);
+            .handle_platform_output(window, full_output.platform_output);
 
-        let clipped_primitives = self.ctx().tessellate(full_output.shapes);
+        let pixels_per_point = self.ctx().pixels_per_point();
+        let clipped_primitives = self.ctx().tessellate(full_output.shapes, pixels_per_point);
         self.prims = Some(clipped_primitives);
 
         self.renderer.update_buffers(
@@ -119,7 +127,7 @@ impl<'a> Backend {
     }
 
     pub fn ctx(&self) -> &Ctx {
-        &self.ctx
+        &self.platform.egui_ctx()
     }
 
     pub fn platform(&self) -> &Platform {

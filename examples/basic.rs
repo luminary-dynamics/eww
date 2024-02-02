@@ -1,10 +1,12 @@
 use egui::{self};
+use egui_winit::winit::{event::KeyEvent, keyboard::NamedKey};
 use eww::{wgpu, winit};
+use std::sync::Arc;
 
 use winit::{
-    event::{ElementState, KeyboardInput, VirtualKeyCode},
-    event::{Event, WindowEvent},
+    event::{ElementState, Event, WindowEvent, WindowEvent::KeyboardInput},
     event_loop::{ControlFlow, EventLoop},
+    keyboard::Key,
     window::{Window, WindowBuilder},
 };
 
@@ -17,11 +19,13 @@ struct GuiState {
 use futures::executor::block_on;
 
 fn main() {
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new()
         .with_title("eww basic example")
         .build(&event_loop)
         .unwrap();
+
+    let window = Arc::new(window);
 
     let mut wgpu = block_on(WgpuCtx::init(&window));
 
@@ -35,33 +39,30 @@ fn main() {
         ..Default::default()
     };
 
-    event_loop.run(move |event, _, control_flow| {
-        backend.handle_event(&event);
-
+    event_loop.run(move |event, elwt| {
+        backend.handle_event(&window, &event);
         match event {
-            Event::MainEventsCleared => window.request_redraw(),
-            Event::RedrawRequested(window_id) if window_id == window.id() => {
-                render(&wgpu, &window, &mut backend, &mut gui_state)
-            }
+            Event::AboutToWait => window.request_redraw(),
             Event::WindowEvent {
                 ref event,
                 window_id,
             } if window_id == window.id() => match event {
+                WindowEvent::RedrawRequested => {
+                    render(&wgpu, &window, &mut backend, &mut gui_state)
+                }
                 WindowEvent::CloseRequested
                 | WindowEvent::KeyboardInput {
-                    input:
-                        KeyboardInput {
+                    event:
+                        KeyEvent {
+                            logical_key: Key::Named(NamedKey::Escape),
                             state: ElementState::Pressed,
-                            virtual_keycode: Some(VirtualKeyCode::Escape),
                             ..
                         },
                     ..
-                } => *control_flow = ControlFlow::Exit,
+                } => elwt.exit(),
                 WindowEvent::Resized(new_size) => {
                     resize(&mut wgpu, *new_size);
-                }
-                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    resize(&mut wgpu, **new_inner_size);
+                    window.request_redraw();
                 }
                 _ => {}
             },
@@ -114,10 +115,12 @@ fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend, gui_state
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(clear_color),
-                    store: true,
+                    store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
         });
 
         backend.render(window, &mut render_pass);
@@ -143,22 +146,22 @@ fn build_gui(ctx: &egui::Context, gui_state: &mut GuiState) {
     });
 }
 
-struct WgpuCtx {
+struct WgpuCtx<'a> {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    surface: wgpu::Surface,
+    surface: wgpu::Surface<'a>,
     config: wgpu::SurfaceConfiguration,
 }
 
-impl WgpuCtx {
-    async fn init(window: &Window) -> Self {
+impl<'a> WgpuCtx<'a> {
+    async fn init(window: &Arc<Window>) -> WgpuCtx<'a> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            dx12_shader_compiler: Default::default(),
+            ..Default::default()
         });
 
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        let surface = instance.create_surface(window.clone()).unwrap();
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -173,8 +176,8 @@ impl WgpuCtx {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    features: wgpu::Features::default(),
-                    limits: wgpu::Limits::default(),
+                    required_features: wgpu::Features::default(),
+                    required_limits: wgpu::Limits::default(),
                 },
                 None,
             )
@@ -189,15 +192,9 @@ impl WgpuCtx {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: surface_caps.present_modes[0],
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-        };
+        let config = surface
+            .get_default_config(&adapter, size.width, size.height)
+            .unwrap();
         surface.configure(&device, &config);
 
         Self {
