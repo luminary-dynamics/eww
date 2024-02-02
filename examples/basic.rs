@@ -123,7 +123,12 @@ fn render(wgpu: &WgpuCtx, window: &Window, backend: &mut eww::Backend, gui_state
             timestamp_writes: None,
         });
 
-        backend.render(window, &mut render_pass);
+        backend.render(
+            &mut render_pass,
+            wgpu.config.width,
+            wgpu.config.height,
+            window.scale_factor() as f32,
+        );
     }
 
     wgpu.queue.submit(Some(encoder.finish()));

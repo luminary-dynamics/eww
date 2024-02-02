@@ -109,14 +109,15 @@ impl<'a> Backend {
 
     pub fn render(
         &'a mut self,
-        window: &'a window::Window,
         render_pass: &mut wgpu::RenderPass<'a>,
+        width: u32,
+        height: u32,
+        pixels_per_point: f32,
     ) {
         let screen_descriptor = {
-            let size = window.inner_size();
             renderer::renderer::ScreenDescriptor {
-                size_in_pixels: [size.width, size.height],
-                pixels_per_point: window.scale_factor() as f32,
+                size_in_pixels: [width, height],
+                pixels_per_point,
             }
         };
         self.renderer.render(
