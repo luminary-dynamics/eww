@@ -39,7 +39,7 @@ fn main() {
         ..Default::default()
     };
 
-    event_loop.run(move |event, elwt| {
+    let _ = event_loop.run(move |event, elwt| {
         backend.handle_event(&window, &event);
         match event {
             Event::AboutToWait => window.request_redraw(),
