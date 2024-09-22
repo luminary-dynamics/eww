@@ -11,6 +11,8 @@ pub use renderer::Renderer;
 use egui::Context as Ctx;
 use winit::window;
 
+use renderer::ScreenDescriptor;
+
 /// Egui backend with winit platform and wgpu renderer
 pub struct Backend {
     platform: Platform,
@@ -74,7 +76,7 @@ impl<'a> Backend {
 
         let screen_descriptor = {
             let size = window.inner_size();
-            renderer::ScreenDescriptor {
+            ScreenDescriptor {
                 size_in_pixels: [size.width, size.height],
                 pixels_per_point: window.scale_factor() as f32,
             }
@@ -115,7 +117,7 @@ impl<'a> Backend {
         pixels_per_point: f32,
     ) {
         let screen_descriptor = {
-            renderer::ScreenDescriptor {
+            ScreenDescriptor {
                 size_in_pixels: [width, height],
                 pixels_per_point,
             }
